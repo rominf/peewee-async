@@ -50,6 +50,9 @@ DB_DEFAULTS = {
         'user': 'postgres',
         'max_connections': 4,
     },
+    'sqlite': {
+        'database': 'test.db'
+    },
     'mysql': {
         'database': 'test',
         'host': '127.0.0.1',
@@ -71,6 +74,7 @@ DB_CLASSES = {
     'postgres-ext': peewee_asyncext.PostgresqlExtDatabase,
     'postgres-pool': peewee_async.PooledPostgresqlDatabase,
     'postgres-pool-ext': peewee_asyncext.PooledPostgresqlExtDatabase,
+    'sqlite': peewee_async.SqliteDatabase,
     'mysql': peewee_async.MySQLDatabase,
     'mysql-pool': peewee_async.PooledMySQLDatabase
 }
@@ -85,6 +89,11 @@ try:
 except ImportError:
     aiomysql = None
 
+try:
+    import aioodbc
+except ImportError:
+    aioodbc = None
+
 
 def setUpModule():
     try:
@@ -97,6 +106,12 @@ def setUpModule():
         print("aiopg is not installed, ignoring PostgreSQL tests")
         for key in list(DB_CLASSES.keys()):
             if key.startswith('postgres'):
+                DB_CLASSES.pop(key)
+
+    if not aioodbc:
+        print("aioodbc is not installed, ignoring SQLite tests")
+        for key in list(DB_CLASSES.keys()):
+            if key.startswith('sqlite'):
                 DB_CLASSES.pop(key)
 
     if not aiomysql:

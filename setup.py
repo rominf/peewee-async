@@ -56,9 +56,11 @@ setup(
             'pylint',
             'wheel',
             'aiomysql',
-            'aiopg'
+            'aiopg',
+            'aioodbc'
         ],
         'aiopg': ['aiopg>=0.14.0'],
+        'aioodbc': ['aioodbc>=0.3.2'],
         'aiomysql': ['aiomysql>=0.0.19'],
     },
     py_modules=[

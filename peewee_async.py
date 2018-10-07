@@ -32,6 +32,11 @@ try:
 except ImportError:
     aiomysql = None
 
+try:
+    import aioodbc
+except ImportError:
+    aioodbc = None
+
 __version__ = '0.6.0a'
 
 __all__ = [
@@ -1129,6 +1134,138 @@ register_database(PooledPostgresqlDatabase, 'postgres+pool+async',
                   'postgresql+pool+async')
 
 
+##########
+# SQLite #
+##########
+
+
+class AsyncSqliteConnection:
+    """Asynchronous database connection pool.
+    """
+    def __init__(self, *, database=None, loop=None, timeout=None, **kwargs):
+        self.pool = None
+        self.loop = loop
+        self.dsn = f'Driver=SQLite3;Database={database}'
+        self.timeout = timeout or 5.0  # Value taken from builtin sqlite3 Python library
+        self.connect_params = kwargs
+
+    async def acquire(self):
+        """Acquire connection from pool.
+        """
+        return await self.pool.acquire()
+
+    async def release(self, conn):
+        """Release connection to pool.
+        """
+        await self.pool.release(conn)
+
+    async def connect(self):
+        """Create connection pool asynchronously.
+        """
+        self.pool = await aioodbc.create_pool(
+            loop=self.loop,
+            timeout=self.timeout,
+            dsn=self.dsn,
+            **self.connect_params)
+
+    async def close(self):
+        """Terminate all pool connections.
+        """
+        self.pool.close()
+        await self.pool.wait_closed()
+
+    async def cursor(self, conn=None, *args, **kwargs):
+        """Get a cursor for the specified transaction connection
+        or acquire from the pool.
+        """
+        in_transaction = conn is not None
+        if not conn:
+            conn = await self.acquire()
+        cursor = await conn.cursor(*args, **kwargs)
+        cursor.release = functools.partial(
+            self.release_cursor, cursor,
+            in_transaction=in_transaction)
+        return cursor
+
+    async def release_cursor(self, cursor, in_transaction=False):
+        """Release cursor coroutine. Unless in transaction,
+        the connection is also released back to the pool.
+        """
+        conn = cursor.connection
+        await cursor.close()
+        if not in_transaction:
+            await self.release(conn)
+
+
+class AsyncSqliteMixin(AsyncDatabase):
+    """Mixin for `peewee.SqliteDatabase` providing extra methods
+    for managing async connection.
+    """
+    if aioodbc:
+        import sqlite3
+        Error = sqlite3.Error
+
+    def init_async(self, conn_cls=AsyncSqliteConnection, enable_json=False, enable_hstore=False):
+        if not aioodbc:
+            raise Exception("Error, aioodbc is not installed!")
+        self._async_conn_cls = conn_cls
+        self._enable_json = enable_json
+        self._enable_hstore = enable_hstore
+
+    @property
+    def connect_params_async(self):
+        """Connection parameters for `aiopg.Connection`
+        """
+        kwargs = self.connect_params.copy()
+        kwargs.update({
+            'minsize': self.min_connections,
+            'maxsize': self.max_connections,
+            'enable_json': self._enable_json,
+            'enable_hstore': self._enable_hstore,
+        })
+        return kwargs
+
+    async def last_insert_id_async(self, cursor):
+        """Get ID of last inserted row.
+
+        NOTE: it's not clear, when this code is executed?
+        """
+        # try:
+        #     return cursor if query_type else cursor[0][0]
+        # except (IndexError, KeyError, TypeError):
+        #     pass
+        return cursor.lastrowid
+
+
+class SqliteDatabase(AsyncSqliteMixin, peewee.SqliteDatabase):
+    """SQLite database driver providing **single drop-in sync** connection
+    and **single async connection** interface.
+
+    Example::
+
+        database = SqliteDatabase('test.db')
+
+    See also:
+    http://peewee.readthedocs.io/en/latest/peewee/api.html#SqliteDatabase
+    """
+    def init(self, database, **kwargs):
+        self.min_connections = 1
+        self.max_connections = 1
+        super().init(database, **kwargs)
+        self.init_async()
+
+    @property
+    def use_speedups(self):
+        return False
+
+    @use_speedups.setter
+    def use_speedups(self, value):
+        pass
+
+
+register_database(PostgresqlDatabase, 'sqlite+async')
+
+
 #########
 # MySQL #
 #########
@@ -1427,7 +1564,7 @@ async def _run_sql(database, operation, *args, **kwargs):
 
         try:
             await cursor.execute(operation, *args, **kwargs)
-        except:
+        except Exception as e:
             await cursor.release()
             raise
 
