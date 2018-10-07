@@ -23,6 +23,11 @@ import peewee
 from playhouse.db_url import register_database
 
 try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None
+
+try:
     import aiopg
 except ImportError:
     aiopg = None
@@ -40,6 +45,7 @@ __all__ = [
     'Manager',
     'PostgresqlDatabase',
     'PooledPostgresqlDatabase',
+    'SqliteDatabase',
     'MySQLDatabase',
     'PooledMySQLDatabase',
 
@@ -961,6 +967,115 @@ class AsyncDatabase:
                         "Error, sync query is not allowed: %s %s" %
                         (str(args), str(kwargs)))
         return super().execute_sql(*args, **kwargs)
+
+
+##########
+# SQLite #
+##########
+
+
+class AsyncSqliteConnection:
+    """Asynchronous database connection pool.
+    """
+    def __init__(self, *, database=None, loop=None, timeout=None, **kwargs):
+        self.pool = None
+        self.loop = loop
+        self.database = database
+        self.timeout = timeout or 5.0  # Value taken from sqlite3 library
+        self.connect_params = kwargs
+        self.conn = None
+
+    def release(self, conn):
+        """Release connection to pool.
+        """
+        _ = conn
+        self.conn.close()
+
+    async def connect(self):
+        """Create connection pool asynchronously.
+        """
+        self.conn = aiosqlite.connect(
+            loop=self.loop,
+            timeout=self.timeout,
+            database=self.database,
+            **self.connect_params)
+
+    async def close(self):
+        """Terminate all pool connections.
+        """
+        self.release(None)
+
+    async def cursor(self, conn=None, *args, **kwargs):
+        """Get a cursor for the specified transaction connection
+        or acquire from the pool.
+        """
+        in_transaction = conn is not None
+        if not conn:
+            conn = self.conn
+        async with conn as db:
+            cursor = await db.cursor(*args, **kwargs)
+        cursor.release = functools.partial(
+            self.release_cursor, cursor,
+            in_transaction=in_transaction)
+        return cursor
+
+    async def release_cursor(self, cursor, in_transaction=False):
+        """Release cursor coroutine. Unless in transaction,
+        the connection is also released back to the pool.
+        """
+        conn = cursor.connection
+        cursor.close()
+        if not in_transaction:
+            self.release(conn)
+
+
+class AsyncSqliteMixin(AsyncDatabase):
+    """Mixin for `peewee.SqliteDatabase` providing extra methods
+    for managing async connection.
+    """
+    if aiosqlite:
+        import sqlite3
+        Error = sqlite3.Error
+
+    def init_async(self, conn_cls=AsyncSqliteConnection):
+        if not aiosqlite:
+            raise Exception("Error, aiosqlite is not installed!")
+        self._async_conn_cls = conn_cls
+
+    @property
+    def connect_params_async(self):
+        """Connection parameters for `aiosqlite.Connection`
+        """
+        return self.connect_params.copy()
+
+
+class SqliteDatabase(AsyncSqliteMixin, peewee.SqliteDatabase):
+    """SQLite database driver providing **single drop-in sync** connection
+    and **single async connection** interface.
+
+    Example::
+
+        database = SqliteDatabase('test')
+
+    See also:
+    http://peewee.readthedocs.io/en/latest/peewee/api.html#SqliteDatabase
+    """
+    def init(self, database, **kwargs):
+        self.min_connections = 1
+        self.max_connections = 1
+        super().init(database, **kwargs)
+        self.init_async()
+
+    @property
+    def use_speedups(self):
+        return False
+
+    @use_speedups.setter
+    def use_speedups(self, value):
+        pass
+
+
+register_database(SqliteDatabase, 'sqlite+async')
 
 
 ##############

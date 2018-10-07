@@ -50,6 +50,9 @@ DB_DEFAULTS = {
         'user': 'postgres',
         'max_connections': 4,
     },
+    'sqlite': {
+        'database': 'test.db'
+    },
     'mysql': {
         'database': 'test',
         'host': '127.0.0.1',
@@ -67,6 +70,7 @@ DB_DEFAULTS = {
 DB_OVERRIDES = {}
 
 DB_CLASSES = {
+    'sqlite': peewee_async.SqliteDatabase,
     'postgres': peewee_async.PostgresqlDatabase,
     'postgres-ext': peewee_asyncext.PostgresqlExtDatabase,
     'postgres-pool': peewee_async.PooledPostgresqlDatabase,
@@ -74,6 +78,11 @@ DB_CLASSES = {
     'mysql': peewee_async.MySQLDatabase,
     'mysql-pool': peewee_async.PooledMySQLDatabase
 }
+
+try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None
 
 try:
     import aiopg
